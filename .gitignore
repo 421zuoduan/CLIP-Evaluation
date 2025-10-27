@@ -1,1 +1,15 @@
 .spec-workflow
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.DS_Store
+.venv/
+.env/
+data/
+results/
+cache/
+download/__pycache__/
+model/__pycache__/
+
+nohup.out
