@@ -54,6 +54,30 @@ python main.py --datasets all --data-root ./data --device cuda
 python main.py --datasets cifar10,imagenet_v2,caltech101,dtd,fer2013 --limit 128
 ```
 
+## 批量评测并导出Excel结果
+
+为了方便批量评测多个数据集并将结果导出到Excel文件，可以使用 `test_all_datasets.py` 脚本：
+
+```bash
+# 评测所有支持的数据集（排除country211、imagenetv2、sun397、objectnet和eurosat）
+python test_all_datasets.py
+
+# 指定输出Excel文件名
+python test_all_datasets.py --excel-name my_evaluation_results
+
+# 自定义数据根目录和模型根目录
+python test_all_datasets.py --data-root ./data --model-root ./model_weights
+
+# 调整批处理大小和工作进程数
+python test_all_datasets.py --batch-size 64 --num-workers 8
+```
+
+该脚本会：
+- 自动评测所有支持的数据集（排除部分可能不可用的数据集）
+- 不限制样本数量，使用完整数据集进行评测
+- 将评测结果保存到Excel文件，包含Top-1和Top-5准确率、推理时间等指标
+- 自动调整Excel列宽，提高可读性
+
 > 提示：脚本默认设置 `HF_ENDPOINT=https://hf-mirror.com` 与 `HF_HUB_ENABLE_HF_TRANSFER=1`，确保在国内网络环境下通过 Hugging Face 镜像节点下载模型与数据集。若需要切换镜像，可在运行命令前自行导出环境变量覆盖默认值。
 
 ## 项目结构
@@ -61,6 +85,7 @@ python main.py --datasets cifar10,imagenet_v2,caltech101,dtd,fer2013 --limit 128
 - `download_single/`：各数据集的下载脚本。
 - `model/`：CLIP 模型封装。
 - `main.py`：负责触发数据下载（可选）并运行零样本评测。
+- `test_all_datasets.py`：批量评测所有数据集并将结果导出到Excel文件。
 - `data/`：数据缓存目录（已在 `.gitignore` 中排除）。
 
 ## 支持的数据集
