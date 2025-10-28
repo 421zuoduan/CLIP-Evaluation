@@ -1,0 +1,14 @@
+# 核心依赖
+torch>=1.12.0
+torchvision>=0.13.0
+transformers>=4.20.0
+datasets>=2.0.0
+huggingface_hub>=0.10.0
+
+# 数据处理和科学计算
+numpy>=1.21.0
+tqdm>=4.64.0
+Pillow>=9.0.0
+
+# 可选依赖（用于特定数据集）
+scikit-learn>=1.1.0

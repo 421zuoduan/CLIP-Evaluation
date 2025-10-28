@@ -16,6 +16,12 @@
 - Use the Hugging Face `datasets` library for Country-211, FER2013, Rendered SST2, ImageNet-V2/Adv/Ren/Ske, and benchmarks lacking a torchvision wrapper.
 - Ensure each loader writes to `data/<dataset>` and exposes a consistent `(image, label)` interface so `main.py` can reuse evaluation utilities.
 
+## Currently Supported Datasets
+The project currently supports evaluation on the following datasets:
+- ImageNet variants: imagenet1k, imagenet_v2, imagenet_adv, imagenet_ren, imagenet_ske
+- CIFAR series: cifar10, cifar100
+- Other datasets: caltech101, country211, dtd, fer2013, fgvc_aircraft, flowers102, food101, gtsrb, mnist, pets, rendered_sst2, resisc45, stanford_cars, stl10, voc2007
+
 ## Coding Style & Naming Conventions
 - Follow PEP 8 with 4-space indentation, type hints, and snake_case identifiers (`load_imagenet_split`, `run_eval_loop`).
 - Prefer dataclasses or typed dictionaries to describe dataset metadata (classes, resolution, normalization).
