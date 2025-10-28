@@ -1,0 +1,63 @@
+import os
+from pathlib import Path
+
+# 设置 Hugging Face 镜像
+os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
+os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "1"
+
+try:
+    from huggingface_hub import snapshot_download
+except ImportError as e:
+    print(f"❌ 缺少 huggingface_hub 库: {e}")
+    print("💡 请运行: pip install huggingface_hub")
+    exit(1)
+
+# 配置下载参数
+repo_id = "openai/clip-vit-large-patch14"
+local_dir = "./data/clip"
+cache_dir = "./data/clip/__hf_cache__"
+
+# 确保目录存在
+Path(local_dir).mkdir(parents=True, exist_ok=True)
+Path(cache_dir).mkdir(parents=True, exist_ok=True)
+
+print(f"🔄 开始从 {repo_id} 下载 CLIP ViT-L/14 模型...")
+print(f"📁 保存路径: {local_dir}")
+print(f"🌐 使用镜像: {os.environ['HF_ENDPOINT']}")
+
+try:
+    # 从 Hugging Face Hub 下载模型
+    downloaded_path = snapshot_download(
+        repo_id=repo_id,
+        repo_type="model",
+        cache_dir=cache_dir,
+        local_dir=local_dir,
+        local_dir_use_symlinks=False,
+        resume_download=True,
+    )
+    
+    print("✅ CLIP ViT-L/14 模型下载完成！")
+    print(f"📂 模型保存至: {downloaded_path}")
+    
+    # 列出下载的内容
+    print("\n📋 下载的模型文件:")
+    for item in Path(local_dir).iterdir():
+        if item.is_file():
+            size_mb = item.stat().st_size / (1024 * 1024)
+            print(f"  📄 {item.name} ({size_mb:.2f} MB)")
+        elif item.is_dir():
+            file_count = len(list(item.iterdir()))
+            print(f"  📁 {item.name}/ (包含 {file_count} 个文件/子目录)")
+    
+    # 验证关键文件是否存在
+    required_files = ["pytorch_model.bin", "config.json", "preprocessor_config.json"]
+    missing_files = [f for f in required_files if not (Path(local_dir) / f).exists()]
+    
+    if missing_files:
+        print(f"\n⚠️  警告: 以下关键文件缺失: {', '.join(missing_files)}")
+    else:
+        print("\n✅ 所有关键文件已下载完成")
+        
+except Exception as e:
+    print(f"❌ 下载失败: {str(e)}")
+    print("💡 请检查网络连接或确认路径是否有写入权限")

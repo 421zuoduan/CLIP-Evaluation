@@ -54,6 +54,8 @@ python main.py --datasets all --data-root ./data --device cuda
 python main.py --datasets cifar10,imagenet_v2 --limit 128
 ```
 
+> 提示：脚本默认设置 `HF_ENDPOINT=https://hf-mirror.com` 与 `HF_HUB_ENABLE_HF_TRANSFER=1`，确保在国内网络环境下通过 Hugging Face 镜像节点下载模型与数据集。若需要切换镜像，可在运行命令前自行导出环境变量覆盖默认值。
+
 ## 项目结构
 
 - `download/`：数据集注册表与下载 CLI。

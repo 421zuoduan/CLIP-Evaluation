@@ -1,0 +1,1 @@
+wget https://people.eecs.berkeley.edu/~hendrycks/imagenet-r.tar --no-check-certificate

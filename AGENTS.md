@@ -12,8 +12,8 @@
 - `python -m model.clip --download-only --data-root ./data` (example helper) should initialize weights without launching evaluation; add similar utilities when debugging.
 
 ## Dataset Acquisition Workflow
-- Use `torchvision.datasets` for ImageNet variants, CIFAR-10/100, MNIST, STL10, VOC2007, Caltech-101, SUN397, FGVC Aircraft, Stanford Cars, Birdsnap, DTD, Flowers-102, Food-101, GTSRB, Pets, Resisc45.
-- Use the Hugging Face `datasets` library for ObjectNet, Country-211, Eurosat, FER2013, PCam, Rendered SST2, ImageNet-V2/Adv/Ren/Ske, and benchmarks lacking a torchvision wrapper.
+- Use `torchvision.datasets` for ImageNet variants, CIFAR-10/100, MNIST, STL10, VOC2007, Caltech-101, FGVC Aircraft, Stanford Cars, DTD, Flowers-102, Food-101, GTSRB, Pets, Resisc45.
+- Use the Hugging Face `datasets` library for Country-211, FER2013, Rendered SST2, ImageNet-V2/Adv/Ren/Ske, and benchmarks lacking a torchvision wrapper.
 - Ensure each loader writes to `data/<dataset>` and exposes a consistent `(image, label)` interface so `main.py` can reuse evaluation utilities.
 
 ## Coding Style & Naming Conventions
