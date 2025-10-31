@@ -537,15 +537,15 @@ class StanfordCarsDataset(Dataset):
 
 
 class Flowers102Dataset(Dataset):
-    """Flowers-102 数据集加载器"""
-    def __init__(self, data_path: str, transform=None):
+    """Flowers-102 数据集加载器（修复版）"""
+    def __init__(self, data_path: str, split: str = "test", transform=None):
         self.transform = transform
         self.samples = []
-        self.class_names = []
         
         # Flowers-102 数据集结构
         # 图像在 ./data/flowers102/flowers-102/jpg/ 目录下
         # 标签在 ./data/flowers102/flowers-102/imagelabels.mat 文件中
+        # 分割在 ./data/flowers102/flowers-102/setid.mat 文件中
         
         # 查找数据集目录
         dataset_dir = None
@@ -568,51 +568,83 @@ class Flowers102Dataset(Dataset):
         if not os.path.exists(labels_file):
             raise FileNotFoundError(f"Flowers-102标签文件不存在: {labels_file}")
         
+        # 分割文件
+        setid_file = os.path.join(dataset_dir, "setid.mat")
+        if not os.path.exists(setid_file):
+            raise FileNotFoundError(f"Flowers-102分割文件不存在: {setid_file}")
+        
         # 加载标签
         import scipy.io
         labels_data = scipy.io.loadmat(labels_file)
-        # imagelabels.mat包含一个名为'labels'的数组，形状为(1, N)，其中N是图像数量
         labels = labels_data['labels'][0]  # 获取标签数组
         
-        # Flowers-102类别名称（102种花）
+        # 加载分割
+        setid_data = scipy.io.loadmat(setid_file)
+        if split == "train":
+            split_ids = setid_data['trnid'][0]
+        elif split == "valid":
+            split_ids = setid_data['valid'][0]
+        elif split == "test":
+            split_ids = setid_data['tstid'][0]
+        else:
+            raise ValueError(f"不支持的分割: {split}，应为 'train', 'valid' 或 'test'")
+        
+        # Flowers-102类别名称（与torchvision对齐）
         self.class_names = [
-            "pink primrose", "hard-leaved pocket orchid", "canterbury bells", "sweet pea", "english marigold",
-            "tiger lily", "moon orchid", "bird of paradise", "monkshood", "globe thistle",
-            "snapdragon", "colts' foot", "king protea", "spear thistle", "yellow iris",
-            "globe-flower", "purple coneflower", "peruvian lily", "balloon flower", "giant white arum lily",
-            "fire lily", "pincushion flower", "fritillary", "red ginger", "grape hyacinth",
-            "corn poppy", "prince of wales feathers", "stemless gentian", "artichoke", "sweet william",
-            "carnation", "garden phlox", "love in the mist", "mexican aster", "alpine sea holly",
-            "ruby-lipped cattleya", "cape flower", "masterwort", "siam tulip", "lenten rose",
-            "barbeton daisy", "daffodil", "sword lily", "poinsettia", "bolero deep blue",
-            "wallflower", "marigold", "buttercup", "oxeye daisy", "common dandelion",
-            "petunia", "wild pansy", "primula", "sunflower", "pelargonium",
-            "bishop of llandaff", "gaura", "geranium", "orange dahlia", "pink-yellow dahlia",
-            "cautleya spicata", "japanese anemone", "black-eyed susan", "silverbush", "french marigold",
-            "bromelia", "blanket flower", "trumpet creeper", "camellia", "mallow",
-            "mexican petunia", "bougainvillea", "water lily", "rose", "thorn apple",
-            "morning glory", "passion flower", "lotus", "toad lily", "anthurium",
-            "frangipani", "clematis", "hibiscus", "columbine", "desert-rose",
-            "tree mallow", "magnolia", "cyclamen", "watercress", "canna lily",
-            "hippeastrum", "bee balm", "ball moss", "foxglove", "bougainvillea",
-            "camellia", "mallow", "mexican petunia", "bougainvillea", "water lily",
-            "rose", "thorn apple", "morning glory", "passion flower", "lotus"
+            'pink primrose', 'hard-leaved pocket orchid', 'canterbury bells', 'sweet pea', 'english marigold',
+            'tiger lily', 'moon orchid', 'bird of paradise', 'monkshood', 'globe thistle',
+            'snapdragon', "colt's foot", 'king protea', 'spear thistle', 'yellow iris',
+            'globe-flower', 'purple coneflower', 'peruvian lily', 'balloon flower', 'giant white arum lily',
+            'fire lily', 'pincushion flower', 'fritillary', 'red ginger', 'grape hyacinth',
+            'corn poppy', 'prince of wales feathers', 'stemless gentian', 'artichoke', 'sweet william',
+            'carnation', 'garden phlox', 'love in the mist', 'mexican aster', 'alpine sea holly',
+            'ruby-lipped cattleya', 'cape flower', 'great masterwort', 'siam tulip', 'lenten rose',
+            'barbeton daisy', 'daffodil', 'sword lily', 'poinsettia', 'bolero deep blue',
+            'wallflower', 'marigold', 'buttercup', 'oxeye daisy', 'common dandelion',
+            'petunia', 'wild pansy', 'primula', 'sunflower', 'pelargonium',
+            'bishop of llandaff', 'gaura', 'geranium', 'orange dahlia', 'pink-yellow dahlia?',
+            'cautleya spicata', 'japanese anemone', 'black-eyed susan', 'silverbush', 'californian poppy',
+            'osteospermum', 'spring crocus', 'bearded iris', 'windflower', 'tree poppy',
+            'gazania', 'azalea', 'water lily', 'rose', 'thorn apple',
+            'morning glory', 'passion flower', 'lotus', 'toad lily', 'anthurium',
+            'frangipani', 'clematis', 'hibiscus', 'columbine', 'desert-rose',
+            'tree mallow', 'magnolia', 'cyclamen', 'watercress', 'canna lily',
+            'hippeastrum', 'bee balm', 'ball moss', 'foxglove', 'bougainvillea',
+            'camellia', 'mallow', 'mexican petunia', 'bromelia', 'blanket flower',
+            'trumpet creeper', 'blackberry lily'
         ]
         
         # 获取所有图像文件并排序
         img_files = [f for f in os.listdir(images_dir) if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
         img_files.sort()  # 确保图像文件按名称排序，与标签对应
         
-        # 创建样本列表
-        for i, img_file in enumerate(img_files):
-            if i < len(labels):
-                # Flowers-102的标签从1开始，需要转换为0开始的索引
-                label_idx = int(labels[i]) - 1
-                if 0 <= label_idx < len(self.class_names):
-                    img_path = os.path.join(images_dir, img_file)
-                    self.samples.append((img_path, label_idx))
+        # 创建图像ID到文件名的映射
+        img_id_to_filename = {}
+        for img_file in img_files:
+            # 提取图像ID
+            parts = img_file.split('_')
+            if len(parts) >= 2:
+                id_part = parts[1].split('.')[0]  # 去掉.jpg扩展名
+                try:
+                    img_id = int(id_part)
+                    img_id_to_filename[img_id] = img_file
+                except ValueError:
+                    print(f"⚠️  无法解析图像ID: {img_file}")
         
-        print(f"✅ 成功加载 {len(self.samples)} 个样本")
+        # 创建指定分割的样本列表
+        for img_id in split_ids:
+            if img_id in img_id_to_filename:
+                img_file = img_id_to_filename[img_id]
+                # 找到对应的标签索引
+                img_index = img_files.index(img_file)
+                if img_index < len(labels):
+                    # Flowers-102的标签从1开始，需要转换为0开始的索引
+                    label_idx = int(labels[img_index]) - 1
+                    if 0 <= label_idx < len(self.class_names):
+                        img_path = os.path.join(images_dir, img_file)
+                        self.samples.append((img_path, label_idx))
+        
+        print(f"✅ 成功加载 {len(self.samples)} 个{split}样本")
         print(f"✅ 加载了 {len(self.class_names)} 个类别")
     
     def __len__(self):
