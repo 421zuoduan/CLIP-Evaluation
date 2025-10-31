@@ -15,13 +15,12 @@ import json
 import os
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import torch
-import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
-from torchvision import transforms
+from torchvision import datasets as tv_datasets, transforms
 from tqdm import tqdm
 from PIL import Image
 import pickle
@@ -288,90 +287,72 @@ class CIFAR100Dataset(Dataset):
         return img, label
 
 
-class MNISTDataset(Dataset):
-    """MNIST 数据集加载器"""
-    def __init__(self, data_path: str, train: bool = False, transform=None):
+class MNISTRawFallbackDataset(Dataset):
+    """当 torchvision 处理过的 MNIST 文件缺失时的后备加载器"""
+
+    def __init__(self, raw_root: str, split: str = "test", transform=None):
         self.transform = transform
-        self.data_path = data_path
-        
-        # 尝试从processed目录加载
-        mnist_path = os.path.join(data_path, "processed")
-        if train:
-            images_path = os.path.join(mnist_path, "training.pt")
+        if split == "train":
+            prefix = "train"
+        elif split == "test":
+            prefix = "t10k"
         else:
-            images_path = os.path.join(mnist_path, "test.pt")
-        
-        # 如果processed目录不存在，尝试从原始文件加载
-        if not os.path.exists(images_path):
-            print(f"⚠️  处理后的MNIST文件不存在，尝试从原始文件加载...")
-            # 尝试从MNIST子目录的raw文件夹加载
-            mnist_raw_path = os.path.join(data_path, "MNIST", "raw")
-            if os.path.exists(mnist_raw_path):
-                self._load_from_raw(mnist_raw_path, train)
-            else:
-                # 尝试直接从data_path的raw文件夹加载
-                mnist_raw_path = os.path.join(data_path, "raw")
-                if os.path.exists(mnist_raw_path):
-                    self._load_from_raw(mnist_raw_path, train)
-                else:
-                    raise FileNotFoundError(f"无法找到MNIST数据集文件，尝试的路径: {images_path}, {os.path.join(data_path, 'MNIST', 'raw')}, {os.path.join(data_path, 'raw')}")
-        else:
-            # 从processed文件加载
-            self.data, self.labels = torch.load(images_path)
-            self.data = self.data.numpy()
-            self.labels = self.labels.numpy()
-    
-    def _load_from_raw(self, raw_path: str, train: bool):
-        """从原始文件加载MNIST数据"""
+            raise ValueError(f"MNISTRawFallbackDataset 不支持的 split: {split}")
+
+        images_path = os.path.join(raw_root, f"{prefix}-images-idx3-ubyte")
+        labels_path = os.path.join(raw_root, f"{prefix}-labels-idx1-ubyte")
+
+        self.data = self._load_images(images_path)
+        self.labels = self._load_labels(labels_path)
+
+        if self.data.shape[0] != self.labels.shape[0]:
+            raise ValueError("MNIST 图像与标签数量不一致")
+
+    @staticmethod
+    def _resolve_path(base_path: str) -> str:
+        if os.path.exists(base_path):
+            return base_path
+        gz_path = base_path + ".gz"
+        if os.path.exists(gz_path):
+            return gz_path
+        raise FileNotFoundError(f"未找到 MNIST 文件: {base_path}(.gz)")
+
+    @classmethod
+    def _load_images(cls, base_path: str) -> np.ndarray:
+        import gzip
         import struct
-        
-        if train:
-            # 加载训练图像
-            img_path = os.path.join(raw_path, "train-images-idx3-ubyte")
-            label_path = os.path.join(raw_path, "train-labels-idx1-ubyte")
-        else:
-            # 加载测试图像
-            img_path = os.path.join(raw_path, "t10k-images-idx3-ubyte")
-            label_path = os.path.join(raw_path, "t10k-labels-idx1-ubyte")
-        
-        # 读取图像文件
-        with open(img_path, 'rb') as f:
-            # 读取文件头
-            magic, num, rows, cols = struct.unpack('>IIII', f.read(16))
+
+        path = cls._resolve_path(base_path)
+        opener = gzip.open if path.endswith(".gz") else open
+        with opener(path, "rb") as f:
+            magic, num, rows, cols = struct.unpack(">IIII", f.read(16))
             if magic != 2051:
-                raise ValueError(f"无效的MNIST图像文件魔数: {magic}")
-            
-            # 读取图像数据
-            img_data = f.read()
-            self.data = np.frombuffer(img_data, dtype=np.uint8)
-            self.data = self.data.reshape(num, rows, cols)
-        
-        # 读取标签文件
-        with open(label_path, 'rb') as f:
-            # 读取文件头
-            magic, num = struct.unpack('>II', f.read(8))
+                raise ValueError(f"无效的 MNIST 图像文件魔数: {magic}")
+            data = np.frombuffer(f.read(), dtype=np.uint8).reshape(num, rows, cols)
+        return data
+
+    @classmethod
+    def _load_labels(cls, base_path: str) -> np.ndarray:
+        import gzip
+        import struct
+
+        path = cls._resolve_path(base_path)
+        opener = gzip.open if path.endswith(".gz") else open
+        with opener(path, "rb") as f:
+            magic, num = struct.unpack(">II", f.read(8))
             if magic != 2049:
-                raise ValueError(f"无效的MNIST标签文件魔数: {magic}")
-            
-            # 读取标签数据
-            label_data = f.read()
-            self.labels = np.frombuffer(label_data, dtype=np.uint8)
-        
-        print(f"✅ 从原始文件加载MNIST数据: {len(self.data)} 个样本")
-    
-    def __len__(self):
+                raise ValueError(f"无效的 MNIST 标签文件魔数: {magic}")
+            labels = np.frombuffer(f.read(), dtype=np.uint8)
+        return labels
+
+    def __len__(self) -> int:
         return len(self.data)
-    
-    def __getitem__(self, idx):
-        img = self.data[idx]
-        label = self.labels[idx]
-        
-        # 转换为 PIL Image
-        img = Image.fromarray(img, mode='L').convert('RGB')
-        
+
+    def __getitem__(self, idx: int):
+        img = Image.fromarray(self.data[idx], mode="L").convert("RGB")
+        label = int(self.labels[idx])
         if self.transform:
             img = self.transform(img)
-        
         return img, label
 
 
@@ -1168,7 +1149,11 @@ class FGVCAircraftDataset(Dataset):
 def load_dataset(dataset_name: str, data_root: str, limit: int = None) -> Tuple[Any, List[str]]:
     """从本地 data 文件夹加载数据集"""
     # 标准图像预处理
+    # CLIP ViT-L/14模型期望输入图像为224x224，这是它在预训练时使用的尺寸
+    # 大多数数据集需要resize到这个尺寸以匹配模型的期望输入
+    # 注意：MNIST使用单独的transform处理，因为它需要特殊的resize操作
     standard_transform = transforms.Compose([
+        transforms.Lambda(lambda img: img.convert("RGB")),
         transforms.Resize(224, interpolation=transforms.InterpolationMode.BICUBIC),
         transforms.CenterCrop(224),
         transforms.ToTensor(),
@@ -1227,10 +1212,6 @@ def load_dataset(dataset_name: str, data_root: str, limit: int = None) -> Tuple[
                     print(f"✅ 成功加载 {len(self.samples)} 个ImageNet1k验证样本")
                     print(f"✅ 加载了 {len(self.class_names)} 个类别")
                     
-                    # 限制样本数量
-                    if limit is not None and limit < len(self.samples):
-                        self.samples = self.samples[:limit]
-                        print(f"⚠️  限制样本数量为: {limit}")
                 
                 def __len__(self):
                     return len(self.samples)
@@ -1290,7 +1271,35 @@ def load_dataset(dataset_name: str, data_root: str, limit: int = None) -> Tuple[
                 ]
             
         elif dataset_name == "mnist":
-            dataset = MNISTDataset(dataset_path, train=False, transform=standard_transform)
+            # MNIST需要特殊的resize处理，因为原始图像很小(28x28)
+            mnist_transform = transforms.Compose([
+                transforms.Lambda(lambda img: img.convert("RGB")),
+                transforms.Resize(224, interpolation=transforms.InterpolationMode.BICUBIC),
+                transforms.CenterCrop(224),
+                transforms.ToTensor(),
+                transforms.Normalize((0.48145466, 0.4578275, 0.40821073),
+                                   (0.26862954, 0.26130258, 0.27577711))
+            ])
+            try:
+                dataset = tv_datasets.MNIST(
+                    root=dataset_path,
+                    train=False,
+                    transform=mnist_transform,
+                    download=False,
+                )
+            except RuntimeError as exc:
+                raw_candidates = [
+                    os.path.join(dataset_path, "MNIST", "raw"),
+                    os.path.join(dataset_path, "raw"),
+                ]
+                for raw_root in raw_candidates:
+                    if os.path.exists(raw_root):
+                        dataset = MNISTRawFallbackDataset(raw_root, split="test", transform=mnist_transform)
+                        break
+                else:
+                    raise RuntimeError(
+                        "未找到处理后的 MNIST 文件，且原始数据缺失。请先下载 MNIST 数据集。"
+                    ) from exc
             class_names = DATASET_CLASSES["mnist"]
             
         elif dataset_name == "caltech101":
@@ -1662,30 +1671,55 @@ def load_dataset(dataset_name: str, data_root: str, limit: int = None) -> Tuple[
                     self.samples = []
                     self.class_names = []
                     
-                    # 加载类别信息
+                    # 尝试加载类别信息
                     classes_file = os.path.join(data_path, "classes.py")
-                    if not os.path.exists(classes_file):
-                        raise FileNotFoundError(f"ImageNet Sketch类别文件不存在: {classes_file}")
-                    
-                    # 执行classes.py文件以获取类别信息
-                    import sys
-                    sys.path.append(os.path.dirname(classes_file))
-                    import classes as imagenet_classes
-                    self.class_names = list(imagenet_classes.IMAGENET2012_CLASSES.values())
-                    
-                    # ImageNet Sketch数据集路径
-                    sketch_path = os.path.join(data_path, "data", "sketch")
-                    if not os.path.exists(sketch_path):
-                        raise FileNotFoundError(f"ImageNet Sketch数据集路径不存在: {sketch_path}")
-                    
-                    # 获取所有类别文件夹
+                    if os.path.exists(classes_file):
+                        # 执行classes.py文件以获取类别信息
+                        import sys
+                        sys.path.append(os.path.dirname(classes_file))
+                        import classes as imagenet_classes
+                        self.class_names = list(imagenet_classes.IMAGENET2012_CLASSES.values())
+                        # 创建一个从WNID到索引的映射
+                        wnid_to_idx = {wnid: i for i, wnid in enumerate(imagenet_classes.IMAGENET2012_CLASSES.keys())}
+                    else:
+                        # 如果找不到classes.py，尝试使用ImageNet1k的meta文件
+                        meta_path = os.path.join(data_root, "imagenet1k", "ILSVRC2012_devkit_t12", "data", "meta.mat")
+                        if os.path.exists(meta_path):
+                            import scipy.io
+                            meta = scipy.io.loadmat(meta_path)
+                            synsets = meta['synsets']
+                            
+                            # 获取所有类别信息
+                            for i in range(synsets.shape[0]):
+                                synset = synsets[i][0]
+                                # 获取WNID和类别名称
+                                wnid = str(synset[1][0])
+                                class_name = str(synset[2][0])
+                                self.class_names.append(class_name)
+                            
+                            # 创建一个从WNID到索引的映射
+                            wnid_to_idx = {}
+                            for i in range(synsets.shape[0]):
+                                synset = synsets[i][0]
+                                wnid = str(synset[1][0])
+                                wnid_to_idx[wnid] = i
+                        else:
+                            # 如果都找不到，使用简化的类别名称
+                            self.class_names = [f"imagenet_class_{i}" for i in range(1000)]
+                            wnid_to_idx = {f"n{i:08d}": i for i in range(1000)}
+
+                    sketch_path = os.path.join(data_path, "imagenet-sketch")
+                    if not os.path.isdir(sketch_path):
+                        alt_path = os.path.join(data_path, "data", "sketch")
+                        if os.path.isdir(alt_path):
+                            sketch_path = alt_path
+                        else:
+                            raise FileNotFoundError(f"ImageNet Sketch数据集路径不存在: {sketch_path}")
+
                     class_dirs = [d for d in os.listdir(sketch_path)
-                                 if os.path.isdir(os.path.join(sketch_path, d))]
+                                  if os.path.isdir(os.path.join(sketch_path, d))]
                     class_dirs.sort()
-                    
-                    # 创建一个从WNID到索引的映射
-                    wnid_to_idx = {wnid: i for i, wnid in enumerate(imagenet_classes.IMAGENET2012_CLASSES.keys())}
-                    
+
                     # 创建样本列表
                     for class_dir in class_dirs:
                         if class_dir not in wnid_to_idx:
@@ -1736,45 +1770,39 @@ def load_dataset(dataset_name: str, data_root: str, limit: int = None) -> Tuple[
                     self.samples = []
                     self.class_names = []
                     
-                    # 加载ImageNet1k的类别信息
+                    # 解析ImageNet1k的类别元数据，构建WNID到可读名称的映射
                     meta_path = os.path.join(data_root, "imagenet1k", "ILSVRC2012_devkit_t12", "data", "meta.mat")
-                    if not os.path.exists(meta_path):
-                        # 如果找不到ImageNet1k的meta文件，使用简化的类别名称
-                        self.class_names = [f"imagenet_class_{i}" for i in range(200)]
-                    else:
+                    wnid_to_name: Dict[str, str] = {}
+                    if os.path.exists(meta_path):
                         import scipy.io
                         meta = scipy.io.loadmat(meta_path)
-                        synsets = meta['synsets']
-                        
-                        # ImageNet Renditions只使用ImageNet1k的前200个类别
-                        for i in range(min(200, synsets.shape[0])):
+                        synsets = meta["synsets"]
+                        for i in range(synsets.shape[0]):
                             synset = synsets[i][0]
-                            # 获取类别名称
+                            wnid = str(synset[1][0])
                             class_name = str(synset[2][0])
-                            self.class_names.append(class_name)
-                    
-                    # ImageNet Renditions数据集路径
+                            wnid_to_name[wnid] = class_name
+
                     ren_path = os.path.join(data_path, "imagenet-r")
-                    if not os.path.exists(ren_path):
-                        raise FileNotFoundError(f"ImageNet Renditions数据集路径不存在: {ren_path}")
-                    
-                    # 获取所有类别文件夹
+                    if not os.path.isdir(ren_path):
+                        alt_path = os.path.join(data_path, "data", "imagenet-r")
+                        if os.path.isdir(alt_path):
+                            ren_path = alt_path
+                        else:
+                            raise FileNotFoundError(f"ImageNet Renditions数据集路径不存在: {ren_path}")
+
                     class_dirs = [d for d in os.listdir(ren_path)
-                                 if os.path.isdir(os.path.join(ren_path, d))]
+                                  if os.path.isdir(os.path.join(ren_path, d))]
                     class_dirs.sort()
-                    
-                    # 创建一个从WNID到索引的映射
+
                     wnid_to_idx = {}
-                    for i in range(min(200, synsets.shape[0])):
-                        synset = synsets[i][0]
-                        wnid = str(synset[1][0])
-                        wnid_to_idx[wnid] = i
-                    
+                    self.class_names = []
+                    for idx, class_dir in enumerate(class_dirs):
+                        wnid_to_idx[class_dir] = idx
+                        self.class_names.append(wnid_to_name.get(class_dir, class_dir))
+
                     # 创建样本列表
                     for class_dir in class_dirs:
-                        if class_dir not in wnid_to_idx:
-                            continue  # 跳过不在类别列表中的文件夹
-                        
                         class_idx = wnid_to_idx[class_dir]
                         class_path = os.path.join(ren_path, class_dir)
                         img_files = [f for f in os.listdir(class_path)
@@ -1820,24 +1848,9 @@ def load_dataset(dataset_name: str, data_root: str, limit: int = None) -> Tuple[
                     self.samples = []
                     self.class_names = []
                     
-                    # 加载ImageNet1k的类别信息
-                    meta_path = os.path.join(data_root, "imagenet1k", "ILSVRC2012_devkit_t12", "data", "meta.mat")
-                    if not os.path.exists(meta_path):
-                        # 如果找不到ImageNet1k的meta文件，使用简化的类别名称
-                        self.class_names = [f"imagenet_class_{i}" for i in range(1000)]
-                    else:
-                        import scipy.io
-                        meta = scipy.io.loadmat(meta_path)
-                        synsets = meta['synsets']
-                        
-                        # 获取所有类别信息
-                        for i in range(synsets.shape[0]):
-                            synset = synsets[i][0]
-                            # 获取WNID和类别名称
-                            wnid = str(synset[1][0])
-                            class_name = str(synset[2][0])
-                            self.class_names.append(class_name)
-                    
+                    label_to_idx: Dict[str, int] = {}
+                    unique_labels: List[str] = []
+
                     # 读取samples.json文件
                     samples_file = os.path.join(data_path, "samples.json")
                     if not os.path.exists(samples_file):
@@ -1858,15 +1871,23 @@ def load_dataset(dataset_name: str, data_root: str, limit: int = None) -> Tuple[
                             # 获取真实标签
                             ground_truth = sample.get('ground_truth', {})
                             label_str = ground_truth.get('label', '')
-                            
-                            # 将标签字符串映射到类别索引
-                            if label_str in self.class_names:
-                                class_idx = self.class_names.index(label_str)
-                                
-                                # 构建完整的图像路径
-                                img_path = os.path.join(data_path, filepath)
-                                if os.path.exists(img_path):
-                                    self.samples.append((img_path, class_idx))
+                            label_clean = label_str.strip()
+                            if not label_clean:
+                                continue
+
+                            normalized_label = label_clean.lower()
+                            class_idx = label_to_idx.get(normalized_label)
+                            if class_idx is None:
+                                class_idx = len(unique_labels)
+                                label_to_idx[normalized_label] = class_idx
+                                unique_labels.append(label_clean)
+
+                            # 构建完整的图像路径
+                            img_path = os.path.join(data_path, filepath)
+                            if os.path.exists(img_path):
+                                self.samples.append((img_path, class_idx))
+                    
+                    self.class_names = unique_labels
                     
                     print(f"✅ 成功加载 {len(self.samples)} 个ImageNet-A样本")
                     print(f"✅ 加载了 {len(self.class_names)} 个类别")
@@ -2017,7 +2038,13 @@ def load_dataset(dataset_name: str, data_root: str, limit: int = None) -> Tuple[
                     # Rendered SST2数据集路径
                     rendered_sst2_path = os.path.join(data_path, "rendered-sst2")
                     if not os.path.exists(rendered_sst2_path):
-                        raise FileNotFoundError(f"Rendered SST2数据集路径不存在: {rendered_sst2_path}")
+                        alt_path = os.path.join(data_path, "Rendered-SST2")
+                        if os.path.exists(alt_path):
+                            rendered_sst2_path = alt_path
+                        elif os.path.exists(os.path.join(data_path, "test")):
+                            rendered_sst2_path = data_path
+                        else:
+                            raise FileNotFoundError(f"Rendered SST2数据集路径不存在: {rendered_sst2_path}")
                     
                     # 测试集路径
                     test_path = os.path.join(rendered_sst2_path, "test")
@@ -2045,10 +2072,8 @@ def load_dataset(dataset_name: str, data_root: str, limit: int = None) -> Tuple[
                     print(f"✅ 成功加载 {len(self.samples)} 个Rendered SST2样本")
                     print(f"✅ 加载了 {len(self.class_names)} 个类别")
                     
-                    # 限制样本数量
-                    if limit is not None and limit < len(self.samples):
-                        self.samples = self.samples[:limit]
-                        print(f"⚠️  限制样本数量为: {limit}")
+                    if limit is not None:
+                        print(f"⚠️  limit 参数在 Rendered SST2 中仅用于日志，实际截断将由评估阶段处理。")
                 
                 def __len__(self):
                     return len(self.samples)
@@ -2229,9 +2254,17 @@ def load_clip_model(model_root: str, device: torch.device, dtype: torch.dtype):
         raise
 
 
-def create_text_prompts(class_names: List[str]) -> List[str]:
+def create_text_prompts(class_names: List[str], dataset_name: Optional[str] = None) -> List[str]:
     """创建文本提示"""
-    return [f"a photo of a {class_name}" for class_name in class_names]
+    prompts = []
+    if dataset_name == "mnist":
+        for class_name in class_names:
+            prompts.append(f"the number {class_name}")
+    else:
+        for class_name in class_names:
+            formatted_name = class_name.replace('_', ' ').strip()
+            prompts.append(f"a photo of a {formatted_name}")
+    return prompts
 
 
 def calculate_metrics(
@@ -2313,12 +2346,13 @@ def evaluate_dataset(
         
         # 编码文本特征
         print("📝 编码文本特征...")
-        text_prompts = create_text_prompts(class_names)
+        text_prompts = create_text_prompts(class_names, dataset_name=dataset_name)
         with torch.no_grad():
             text_inputs = processor(text=text_prompts, padding=True, return_tensors="pt").to(device)
             text_features = model.get_text_features(**text_inputs)
             text_features = text_features / text_features.norm(p=2, dim=-1, keepdim=True)
-        
+            logit_scale = model.logit_scale.exp().to(device)
+
         # 推理
         print("🔍 开始推理...")
         all_predictions = []
@@ -2326,15 +2360,26 @@ def evaluate_dataset(
         
         start_time = time.time()
         
+        to_pil = transforms.ToPILImage() if dataset_name == "mnist" else None
         for batch_idx, (images, targets) in enumerate(tqdm(dataloader, desc=f"评估 {dataset_name}")):
             with torch.no_grad():
                 # 编码图像特征
-                # 图像已经预处理过了，直接传入模型
-                image_features = model.get_image_features(pixel_values=images.to(device))
+                if dataset_name == "mnist":
+                    if isinstance(images, torch.Tensor):
+                        images_pil = [to_pil(img.cpu()) for img in images]
+                    else:
+                        images_pil = images
+                    image_inputs = processor(images=images_pil, return_tensors="pt")
+                    image_inputs = {k: v.to(device) for k, v in image_inputs.items()}
+                    image_features = model.get_image_features(**image_inputs)
+                else:
+                    # 其他数据集的图像已经预处理过了，直接传入模型
+                    image_features = model.get_image_features(pixel_values=images.to(device))
                 image_features = image_features / image_features.norm(p=2, dim=-1, keepdim=True)
                 
                 # 计算相似度
-                similarities = (image_features @ text_features.T).softmax(dim=-1)
+                logits = (image_features @ text_features.T) * logit_scale
+                similarities = logits.softmax(dim=-1)
                 
                 # 获取预测结果，确保k不超过类别数量
                 actual_top_k = min(top_k, similarities.size(-1))
