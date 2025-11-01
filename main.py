@@ -25,6 +25,7 @@ from tqdm import tqdm
 from PIL import Image
 import pickle
 import pandas as pd
+import h5py
 
 # 数据集类名映射
 DATASET_CLASSES = {
@@ -46,7 +47,10 @@ DATASET_CLASSES = {
     "stl10": [f"stl10_class_{i}" for i in range(10)],  # 简化处理
     "voc2007": [f"voc_object_{i}" for i in range(20)],  # 简化处理
     "country211": [f"country_{i}" for i in range(211)],  # 简化处理
-    "eurosat": [f"land_use_{i}" for i in range(10)],  # 简化处理
+    "eurosat": [
+        "AnnualCrop", "Forest", "HerbaceousVegetation", "Highway", "Industrial",
+        "Pasture", "PermanentCrop", "Residential", "River", "SeaLake"
+    ],  # EuroSAT卫星图像数据集的10个土地覆盖类别
     "fer2013": [f"emotion_{i}" for i in range(7)],  # 简化处理
     "resisc45": [f"scene_{i}" for i in range(45)],  # 简化处理
     "rendered_sst2": [
@@ -59,6 +63,7 @@ DATASET_CLASSES = {
     "imagenet_ske": [f"imagenet_ske_class_{i}" for i in range(1000)],  # 简化处理
     "objectnet": [f"object_{i}" for i in range(313)],  # 简化处理
     "fgvc_aircraft": [f"aircraft_{i}" for i in range(100)],  # 简化处理
+    "patchcamelyon": ["normal tissue", "tumor tissue"],  # PatchCamelyon二分类数据集
 }
 
 
@@ -1082,53 +1087,66 @@ class SUN397Dataset(Dataset):
     def __init__(self, data_path: str, transform=None):
         self.transform = transform
         self.samples = []
+        self.class_names = []
         self.class_to_idx = {}
         
-        # SUN397 可能的路径结构
-        possible_paths = [
-            os.path.join(data_path, "test"),
-            os.path.join(data_path, "sun397"),
-            os.path.join(data_path, "images"),
-            data_path
-        ]
+        # SUN397 数据集路径
+        sun397_path = data_path
         
-        image_folder_path = None
-        for path in possible_paths:
-            if os.path.exists(path):
-                # 检查是否包含子目录
-                subdirs = [d for d in os.listdir(path) if os.path.isdir(os.path.join(path, d))]
-                if subdirs:
-                    image_folder_path = path
-                    break
+        # 加载类别名称
+        class_names_file = os.path.join(sun397_path, "ClassName.txt")
+        if not os.path.exists(class_names_file):
+            raise FileNotFoundError(f"SUN397 类别名称文件不存在: {class_names_file}")
         
-        if image_folder_path is None:
-            raise FileNotFoundError(f"无法找到 SUN397 的图像文件夹")
+        with open(class_names_file, 'r') as f:
+            lines = f.readlines()
+            # 提取类别名称，保留原始格式（包含斜杠）
+            self.class_names = [line.strip() for line in lines if line.strip()]
         
-        print(f"🔍 扫描 SUN397 图像文件夹: {image_folder_path}")
+        print(f"✅ 从 {class_names_file} 加载了 {len(self.class_names)} 个类别")
         
-        # 查找所有类别文件夹
-        classes = []
-        for item in os.listdir(image_folder_path):
-            item_path = os.path.join(image_folder_path, item)
-            if os.path.isdir(item_path):
-                classes.append(item)
-        
-        classes.sort()
-        self.class_to_idx = {cls_name: i for i, cls_name in enumerate(classes)}
-        print(f"📁 找到 {len(classes)} 个类别: {classes[:5]}{'...' if len(classes) > 5 else ''}")
+        # 创建类别到索引的映射
+        self.class_to_idx = {class_name: i for i, class_name in enumerate(self.class_names)}
         
         # 收集所有图像文件
-        for class_name in classes:
-            class_dir = os.path.join(image_folder_path, class_name)
+        print(f"🔍 扫描 SUN397 数据集: {sun397_path}")
+        
+        # 遍历所有类别
+        found_classes = 0
+        for class_name in self.class_names:
+            # 构建类别路径，例如 /a/abbey -> a/abbey
+            # 去掉开头的斜杠
+            class_path = os.path.join(sun397_path, class_name[1:])
+            
+            if not os.path.exists(class_path):
+                continue  # 跳过不存在的类别目录
+            
+            found_classes += 1
             class_idx = self.class_to_idx[class_name]
             
-            img_files = [f for f in os.listdir(class_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp', '.gif'))]
+            # 获取该类别下的所有图像文件
+            img_files = [f for f in os.listdir(class_path)
+                        if f.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp', '.gif'))]
             
             for img_name in img_files:
-                img_path = os.path.join(class_dir, img_name)
+                img_path = os.path.join(class_path, img_name)
                 self.samples.append((img_path, class_idx))
         
         print(f"🖼️  找到 {len(self.samples)} 个图像文件")
+        print(f"📁 找到 {found_classes} 个有效类别目录")
+        
+        # 如果没有找到任何样本，打印一些调试信息
+        if len(self.samples) == 0:
+            print("⚠️  警告：没有找到任何图像样本！")
+            print("🔍 调试信息：")
+            print(f"   - 数据集路径: {sun397_path}")
+            print(f"   - 类别数量: {len(self.class_names)}")
+            print(f"   - 前5个类别: {self.class_names[:5]}")
+            if self.class_names:
+                first_class = self.class_names[0]
+                first_class_path = os.path.join(sun397_path, first_class[1:])
+                print(f"   - 第一个类别路径: {first_class_path}")
+                print(f"   - 路径是否存在: {os.path.exists(first_class_path)}")
     
     def __len__(self):
         return len(self.samples)
@@ -1143,6 +1161,9 @@ class SUN397Dataset(Dataset):
             img = self.transform(img)
         
         return img, label
+    
+    def get_classes(self):
+        return self.class_names
 
 
 class FGVCAircraftDataset(Dataset):
@@ -1221,6 +1242,63 @@ class FGVCAircraftDataset(Dataset):
     def class_to_idx(self):
         """为了兼容性，提供class_to_idx属性"""
         return {name: i for i, name in enumerate(self.class_names)}
+
+
+class PatchCamelyonDataset(Dataset):
+    """PatchCamelyon 数据集加载器 - 用于病理图像二分类"""
+    def __init__(self, data_path: str, transform=None, limit=None):
+        self.transform = transform
+        self.samples = []
+        self.class_names = ["normal tissue", "tumor tissue"]
+        
+        # PatchCamelyon数据集文件路径
+        x_file = os.path.join(data_path, "camelyonpatch_level_2_split_test_x.h5")
+        y_file = os.path.join(data_path, "camelyonpatch_level_2_split_test_y.h5")
+        
+        if not os.path.exists(x_file):
+            raise FileNotFoundError(f"PatchCamelyon图像文件不存在: {x_file}")
+        if not os.path.exists(y_file):
+            raise FileNotFoundError(f"PatchCamelyon标签文件不存在: {y_file}")
+        
+        print(f"🔍 加载PatchCamelyon数据集: {data_path}")
+        
+        # 加载图像数据
+        with h5py.File(x_file, 'r') as f:
+            images = f['x'][:]  # 形状: (32768, 96, 96, 3)
+        
+        # 加载标签数据
+        with h5py.File(y_file, 'r') as f:
+            labels = f['y'][:]  # 形状: (32768, 1, 1, 1)
+            labels = labels.flatten()  # 展平为 (32768,)
+        
+        # 创建样本列表
+        num_samples = len(images)
+        if limit is not None and limit < num_samples:
+            num_samples = limit
+            print(f"⚠️  限制样本数量为: {limit}")
+        
+        for i in range(num_samples):
+            self.samples.append((images[i], int(labels[i])))
+        
+        print(f"✅ 成功加载 {len(self.samples)} 个PatchCamelyon样本")
+        print(f"✅ 加载了 {len(self.class_names)} 个类别")
+    
+    def __len__(self):
+        return len(self.samples)
+    
+    def __getitem__(self, idx):
+        image_array, label = self.samples[idx]
+        
+        # 从numpy数组创建PIL图像
+        img = Image.fromarray(image_array, mode='RGB')
+        
+        if self.transform:
+            img = self.transform(img)
+        
+        return img, label
+    
+    def get_classes(self):
+        return self.class_names
 
 
 def load_dataset(dataset_name: str, data_root: str, limit: int = None) -> Tuple[Any, List[str]]:
@@ -1474,7 +1552,7 @@ def load_dataset(dataset_name: str, data_root: str, limit: int = None) -> Tuple[
             
         elif dataset_name == "sun397":
             dataset = SUN397Dataset(dataset_path, transform=standard_transform)
-            class_names = list(dataset.class_to_idx.keys())
+            class_names = dataset.get_classes()
             
         elif dataset_name == "fer2013":
             # FER2013 数据集加载器
@@ -2181,6 +2259,86 @@ def load_dataset(dataset_name: str, data_root: str, limit: int = None) -> Tuple[
             dataset = Country211Dataset(dataset_path, transform=standard_transform, limit=limit)
             class_names = dataset.get_classes()
             
+        elif dataset_name == "eurosat":
+            # EuroSAT数据集加载器
+            class EuroSATDataset(Dataset):
+                def __init__(self, data_path: str, transform=None, limit=None):
+                    self.transform = transform
+                    self.samples = []
+                    self.class_names = [
+                        "AnnualCrop", "Forest", "HerbaceousVegetation", "Highway", "Industrial",
+                        "Pasture", "PermanentCrop", "Residential", "River", "SeaLake"
+                    ]
+                    
+                    # 加载标签映射
+                    label_map_path = os.path.join(data_path, "label_map.json")
+                    if os.path.exists(label_map_path):
+                        import json
+                        with open(label_map_path, 'r') as f:
+                            self.label_map = json.load(f)
+                        print(f"✅ 从 {label_map_path} 加载了标签映射")
+                    else:
+                        # 如果没有标签映射文件，使用默认映射
+                        self.label_map = {name: i for i, name in enumerate(self.class_names)}
+                        print(f"⚠️  使用默认标签映射")
+                    
+                    # 创建类别到索引的映射
+                    class_to_idx = self.label_map
+                    
+                    print(f"🔍 扫描 EuroSAT 数据集: {data_path}")
+                    
+                    # 收集所有图像文件
+                    for class_name in self.class_names:
+                        if class_name not in class_to_idx:
+                            print(f"⚠️  跳过未在标签映射中的类别: {class_name}")
+                            continue
+                            
+                        class_idx = class_to_idx[class_name]
+                        class_dir = os.path.join(data_path, class_name)
+                        
+                        if not os.path.exists(class_dir):
+                            print(f"⚠️  类别目录不存在: {class_dir}")
+                            continue
+                        
+                        img_files = [f for f in os.listdir(class_dir)
+                                   if f.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp', '.gif'))]
+                        
+                        for img_file in img_files:
+                            img_path = os.path.join(class_dir, img_file)
+                            self.samples.append((img_path, class_idx))
+                    
+                    print(f"✅ 成功加载 {len(self.samples)} 个EuroSAT样本")
+                    print(f"✅ 加载了 {len(self.class_names)} 个类别")
+                    
+                    # 限制样本数量
+                    if limit is not None and limit < len(self.samples):
+                        self.samples = self.samples[:limit]
+                        print(f"⚠️  限制样本数量为: {limit}")
+                
+                def __len__(self):
+                    return len(self.samples)
+                
+                def __getitem__(self, idx):
+                    img_path, label = self.samples[idx]
+                    
+                    # 加载图像
+                    img = Image.open(img_path).convert('RGB')
+                    
+                    if self.transform:
+                        img = self.transform(img)
+                    
+                    return img, label
+                
+                def get_classes(self):
+                    return self.class_names
+            
+            dataset = EuroSATDataset(dataset_path, transform=standard_transform, limit=limit)
+            class_names = dataset.get_classes()
+            
+        elif dataset_name == "patchcamelyon":
+            dataset = PatchCamelyonDataset(dataset_path, transform=standard_transform, limit=limit)
+            class_names = dataset.get_classes()
+            
         else:
             # 尝试作为通用图像文件夹数据集加载
             if os.path.exists(dataset_path):
@@ -2293,6 +2451,20 @@ def create_text_prompts(class_names: List[str], dataset_name: Optional[str] = No
             digit_key = str(class_name)
             digit_word = digit_words.get(digit_key, digit_key)
             prompts.append(f"A photo of the digit {digit_word}")
+    elif dataset_name == "eurosat":
+        # 为EuroSAT数据集创建文本提示，与其他数据集保持一致的格式
+        for class_name in class_names:
+            formatted_name = class_name.replace('_', ' ').strip()
+            prompts.append(f"a photo of a {formatted_name}")
+    elif dataset_name == "sun397":
+        # 为SUN397数据集创建文本提示，SUN397是场景识别数据集
+        for class_name in class_names:
+            # 将路径格式转换为可读的场景描述
+            # 例如: "a/abbey" -> "abbey", "c/cafeteria" -> "cafeteria"
+            # 注意：在SUN397Dataset中已经去掉了开头的斜杠，所以这里直接处理
+            scene_name = class_name.split('/')[-1] if '/' in class_name else class_name
+            scene_name = scene_name.replace('_', ' ').strip()
+            prompts.append(f"a photo of a {scene_name}")
     else:
         for class_name in class_names:
             formatted_name = class_name.replace('_', ' ').strip()
