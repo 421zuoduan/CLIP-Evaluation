@@ -24,6 +24,7 @@ from torchvision import datasets as tv_datasets, transforms
 from tqdm import tqdm
 from PIL import Image
 import pickle
+import pandas as pd
 
 # 数据集类名映射
 DATASET_CLASSES = {
@@ -48,7 +49,10 @@ DATASET_CLASSES = {
     "eurosat": [f"land_use_{i}" for i in range(10)],  # 简化处理
     "fer2013": [f"emotion_{i}" for i in range(7)],  # 简化处理
     "resisc45": [f"scene_{i}" for i in range(45)],  # 简化处理
-    "rendered_sst2": ["negative", "positive"],
+    "rendered_sst2": [
+        "text with negative sentiment",
+        "text with positive sentiment"
+    ],
     "imagenet_v2": [f"imagenet_v2_class_{i}" for i in range(1000)],  # 简化处理
     "imagenet_adv": [f"imagenet_adv_class_{i}" for i in range(1000)],  # 简化处理
     "imagenet_ren": [f"imagenet_ren_class_{i}" for i in range(200)],  # 简化处理
@@ -898,70 +902,111 @@ class DTDataset(Dataset):
 
 class GTSRBDataset(Dataset):
     """German Traffic Sign Recognition Benchmark (GTSRB) 数据集加载器"""
-    def __init__(self, data_path: str, transform=None):
+
+    CLASS_NAMES = [
+        "Speed limit (20km/h)", "Speed limit (30km/h)", "Speed limit (50km/h)", "Speed limit (60km/h)",
+        "Speed limit (70km/h)", "Speed limit (80km/h)", "End of speed limit (80km/h)", "Speed limit (100km/h)",
+        "Speed limit (120km/h)", "No passing", "No passing for vehicles over 3.5 metric tons",
+        "Right-of-way at the next intersection", "Priority road", "Yield", "Stop",
+        "No vehicles", "Vehicles over 3.5 metric tons prohibited", "No entry", "General caution",
+        "Dangerous curve to the left", "Dangerous curve to the right", "Double curve", "Bumpy road",
+        "Slippery road", "Road narrows on the right", "Road work", "Traffic signals",
+        "Pedestrians", "Children crossing", "Bicycles crossing", "Beware of ice/snow",
+        "Wild animals crossing", "End of all speed and passing limits", "Turn right ahead", "Turn left ahead",
+        "Ahead only", "Go straight or right", "Go straight or left", "Keep right",
+        "Keep left", "Roundabout mandatory", "End of no passing", "End of no passing by vehicles over 3.5 metric tons"
+    ]
+
+    def __init__(self, data_path: str, transform=None, limit: Optional[int] = None):
         self.transform = transform
-        self.samples = []
-        self.class_to_idx = {}
-        
-        # GTSRB 可能的路径结构
-        possible_paths = [
-            os.path.join(data_path, "test"),
-            os.path.join(data_path, "gtsrb"),
-            os.path.join(data_path, "images"),
-            data_path
-        ]
-        
-        image_folder_path = None
-        for path in possible_paths:
-            if os.path.exists(path):
-                # 检查是否包含子目录
-                subdirs = [d for d in os.listdir(path) if os.path.isdir(os.path.join(path, d))]
-                if subdirs:
-                    image_folder_path = path
-                    break
-        
-        if image_folder_path is None:
-            raise FileNotFoundError(f"无法找到 GTSRB 的图像文件夹")
-        
-        print(f"🔍 扫描 GTSRB 图像文件夹: {image_folder_path}")
-        
-        # 查找所有类别文件夹
-        classes = []
-        for item in os.listdir(image_folder_path):
-            item_path = os.path.join(image_folder_path, item)
-            if os.path.isdir(item_path):
-                classes.append(item)
-        
-        classes.sort()
-        self.class_to_idx = {cls_name: i for i, cls_name in enumerate(classes)}
-        print(f"📁 找到 {len(classes)} 个类别: {classes[:5]}{'...' if len(classes) > 5 else ''}")
-        
-        # 收集所有图像文件
-        for class_name in classes:
-            class_dir = os.path.join(image_folder_path, class_name)
-            class_idx = self.class_to_idx[class_name]
-            
-            img_files = [f for f in os.listdir(class_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp', '.gif'))]
-            
-            for img_name in img_files:
-                img_path = os.path.join(class_dir, img_name)
-                self.samples.append((img_path, class_idx))
-        
-        print(f"🖼️  找到 {len(self.samples)} 个图像文件")
-    
+        self.class_names = self.CLASS_NAMES
+        self.samples: List[Tuple[str, int, Tuple[int, int, int, int]]] = []
+
+        labels_path = self._find_file(data_path, "GT-final_test.csv")
+        if labels_path is None:
+            raise FileNotFoundError(
+                "未找到 GTSRB 的 GT-final_test.csv，请确认数据目录结构是否正确"
+            )
+
+        df = pd.read_csv(labels_path, sep=';')
+        if df.empty:
+            raise ValueError("GT-final_test.csv 为空，无法加载 GTSRB 数据集")
+
+        first_filename = df.iloc[0]['Filename']
+        images_root = self._find_directory_with_file(data_path, first_filename)
+        if images_root is None:
+            raise FileNotFoundError(
+                "未找到 GTSRB 图像目录，无法匹配 GT-final_test.csv 中的文件"
+            )
+
+        missing_files = 0
+        for _, row in df.iterrows():
+            filename = row['Filename']
+            class_id = int(row['ClassId'])
+            img_path = os.path.join(images_root, filename)
+            if not os.path.exists(img_path):
+                alt_root = self._find_directory_with_file(data_path, filename)
+                if alt_root is None:
+                    missing_files += 1
+                    continue
+                img_path = os.path.join(alt_root, filename)
+
+            width, height = int(row['Width']), int(row['Height'])
+            x1, y1 = int(row['Roi.X1']), int(row['Roi.Y1'])
+            x2, y2 = int(row['Roi.X2']), int(row['Roi.Y2'])
+
+            # 将ROI裁剪范围限制在图像尺寸内，防止越界
+            x1 = max(0, min(x1, width - 1))
+            y1 = max(0, min(y1, height - 1))
+            x2 = max(x1 + 1, min(x2, width))
+            y2 = max(y1 + 1, min(y2, height))
+
+            if 0 <= class_id < len(self.class_names):
+                self.samples.append((img_path, class_id, (x1, y1, x2, y2)))
+
+        if missing_files:
+            print(f"⚠️  有 {missing_files} 个 GTSRB 图像文件缺失，已跳过这些样本")
+
+        if limit is not None and limit < len(self.samples):
+            rng = np.random.default_rng(0)
+            indices = rng.choice(len(self.samples), size=limit, replace=False)
+            self.samples = [self.samples[i] for i in indices]
+
+        print(f"✅ 成功加载 {len(self.samples)} 个GTSRB样本")
+        print(f"✅ 加载了 {len(self.class_names)} 个类别")
+
+    @staticmethod
+    def _find_file(root: str, filename: str) -> Optional[str]:
+        for current_root, _, files in os.walk(root):
+            if filename in files:
+                return os.path.join(current_root, filename)
+        return None
+
+    @staticmethod
+    def _find_directory_with_file(root: str, filename: str) -> Optional[str]:
+        for current_root, _, files in os.walk(root):
+            if filename in files:
+                return current_root
+        return None
+
     def __len__(self):
         return len(self.samples)
-    
+
     def __getitem__(self, idx):
-        img_path, label = self.samples[idx]
-        
-        # 加载图像
+        img_path, label, roi = self.samples[idx]
+
         img = Image.open(img_path).convert('RGB')
-        
+        x1, y1, x2, y2 = roi
+        if 0 <= x1 < x2 and 0 <= y1 < y2:
+            img = img.crop((x1, y1, x2, y2))
+
         if self.transform:
             img = self.transform(img)
-        
+
         return img, label
+
+    def get_classes(self) -> List[str]:
+        return self.class_names
 
 
 class STL10Dataset(Dataset):
@@ -1361,67 +1406,6 @@ def load_dataset(dataset_name: str, data_root: str, limit: int = None) -> Tuple[
             class_names = list(dataset.class_to_idx.keys())
             
         elif dataset_name == "gtsrb":
-            # GTSRB数据集需要特殊处理，图像和标签在不同的位置
-            class GTSRBDataset(Dataset):
-                def __init__(self, data_path: str, transform=None, limit=None):
-                    self.transform = transform
-                    self.samples = []
-                    
-                    # GTSRB类别名称
-                    self.class_names = [
-                        "Speed limit (20km/h)", "Speed limit (30km/h)", "Speed limit (50km/h)", "Speed limit (60km/h)",
-                        "Speed limit (70km/h)", "Speed limit (80km/h)", "End of speed limit (80km/h)", "Speed limit (100km/h)",
-                        "Speed limit (120km/h)", "No passing", "No passing for vehicles over 3.5 metric tons",
-                        "Right-of-way at the next intersection", "Priority road", "Yield", "Stop",
-                        "No vehicles", "Vehicles over 3.5 metric tons prohibited", "No entry", "General caution",
-                        "Dangerous curve to the left", "Dangerous curve to the right", "Double curve", "Bumpy road",
-                        "Slippery road", "Road narrows on the right", "Road work", "Traffic signals",
-                        "Pedestrians", "Children crossing", "Bicycles crossing", "Beware of ice/snow",
-                        "Wild animals crossing", "End of all speed and passing limits", "Turn right ahead", "Turn left ahead",
-                        "Ahead only", "Go straight or right", "Go straight or left", "Keep right",
-                        "Keep left", "Roundabout mandatory", "End of no passing", "End of no passing by vehicles over 3.5 metric tons"
-                    ]
-                    
-                    # 图像路径
-                    images_path = os.path.join(data_path, "gtsrb", "GTSRB", "Final_Test", "Images")
-                    # 标签文件路径
-                    labels_path = os.path.join(data_path, "gtsrb", "GT-final_test.csv")
-                    
-                    # 读取标签文件
-                    import pandas as pd
-                    df = pd.read_csv(labels_path, sep=';')
-                    
-                    # 创建样本列表
-                    for idx, row in df.iterrows():
-                        if limit is not None and len(self.samples) >= limit:
-                            break
-                        
-                        filename = row['Filename']
-                        class_id = int(row['ClassId'])
-                        
-                        # 确保类别ID在有效范围内
-                        if class_id < len(self.class_names):
-                            img_path = os.path.join(images_path, filename)
-                            if os.path.exists(img_path):
-                                self.samples.append((img_path, class_id))
-                
-                def __len__(self):
-                    return len(self.samples)
-                
-                def __getitem__(self, idx):
-                    img_path, label = self.samples[idx]
-                    
-                    # 加载图像
-                    img = Image.open(img_path).convert('RGB')
-                    
-                    if self.transform:
-                        img = self.transform(img)
-                    
-                    return img, label
-                
-                def get_classes(self):
-                    return self.class_names
-            
             dataset = GTSRBDataset(dataset_path, transform=standard_transform, limit=limit)
             class_names = dataset.get_classes()
             
@@ -2065,7 +2049,10 @@ def load_dataset(dataset_name: str, data_root: str, limit: int = None) -> Tuple[
                 def __init__(self, data_path: str, transform=None, limit=None):
                     self.transform = transform
                     self.samples = []
-                    self.class_names = ["negative", "positive"]
+                    self.class_names = [
+                        "text with negative sentiment",
+                        "text with positive sentiment"
+                    ]
                     
                     # Rendered SST2数据集路径
                     rendered_sst2_path = os.path.join(data_path, "rendered-sst2")
@@ -2287,11 +2274,25 @@ def load_clip_model(model_root: str, device: torch.device, dtype: torch.dtype):
 
 
 def create_text_prompts(class_names: List[str], dataset_name: Optional[str] = None) -> List[str]:
-    """创建文本提示"""
+    """创建统一的文本提示"""
     prompts = []
     if dataset_name == "mnist":
+        digit_words = {
+            "0": "zero",
+            "1": "one",
+            "2": "two",
+            "3": "three",
+            "4": "four",
+            "5": "five",
+            "6": "six",
+            "7": "seven",
+            "8": "eight",
+            "9": "nine",
+        }
         for class_name in class_names:
-            prompts.append(f"the number {class_name}")
+            digit_key = str(class_name)
+            digit_word = digit_words.get(digit_key, digit_key)
+            prompts.append(f"A photo of the digit {digit_word}")
     else:
         for class_name in class_names:
             formatted_name = class_name.replace('_', ' ').strip()
